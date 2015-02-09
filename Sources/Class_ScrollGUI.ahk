@@ -4,6 +4,7 @@
 ; Tested with:    AHK 1.1.19.02
 ; Tested on:      Win 8.1 (x64)
 ; Change log:     1.0.00.00/2015-02-06/just me        -  initial release on ahkscript.org
+;                 1.0.01.00/2015-02-08/just me        -  bug fixes
 ; License:        The Unlicense -> http://unlicense.org
 ; ======================================================================================================================
 Class ScrollGUI {
@@ -73,12 +74,12 @@ Class ScrollGUI {
          MY := MaxV + 1
       }
       Gui, New, %GuiOptions% %Styles% +hwndHWND
+      Gui, %HWND%:Show, w%Width% h%Height% Hide
       If (MX <> "") || (MY <> "")
          Gui, %HWND%:+MaxSize%MX%x%MY%
-      Gui, %HWND%:Show, w%Width% h%Height% Hide
       DllCall("User32.dll\GetClientRect", "Ptr", HWND, "Ptr", &RC)
-      PageH := NumGet(RC, 8, "Int")
-      PageV := Numget(RC, 12, "Int")
+      PageH := NumGet(RC, 8, "Int") + 1
+      PageV := Numget(RC, 12, "Int") + 1
       ; Instance variables
       This.HWND := HWND
       This.HGUI := HGUI
@@ -178,7 +179,7 @@ Class ScrollGUI {
       SH := SV := 0
       If This.ScrollH {
          If (Width <> This.Width) {
-            This.SetScrollInfo(0, {Page: Width})
+            This.SetScrollInfo(0, {Page: Width + 1})
             This.Width := Width
             This.GetScrollInfo(0, SI)
             PosH := NumGet(SI, 20, "Int")
@@ -188,7 +189,7 @@ Class ScrollGUI {
       }
       If This.ScrollV {
          If (Height <> This.Height) {
-            This.SetScrollInfo(1, {Page: Height})
+            This.SetScrollInfo(1, {Page: Height + 1})
             This.Height := Height
             This.GetScrollInfo(1, SI)
             PosV := NumGet(SI, 20, "Int")
