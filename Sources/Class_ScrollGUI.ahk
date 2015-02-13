@@ -1,10 +1,11 @@
 ﻿; ======================================================================================================================
 ; Namepace:       ScrollGUI
 ; Function:       Create a scrollable GUI as a parent for GUI windows.
-; Tested with:    AHK 1.1.19.02
+; Tested with:    AHK 1.1.19.03
 ; Tested on:      Win 8.1 (x64)
 ; Change log:     1.0.00.00/2015-02-06/just me        -  initial release on ahkscript.org
 ;                 1.0.01.00/2015-02-08/just me        -  bug fixes
+;                 1.1.00.00/2015-02-13/just me        -  bug fixes, mouse wheel handling, AutoSize method
 ; License:        The Unlicense -> http://unlicense.org
 ; ======================================================================================================================
 Class ScrollGUI {
@@ -14,9 +15,9 @@ Class ScrollGUI {
    ; Parameters:
    ;    HGUI        -  HWND of the GUI child window.
    ;    Width       -  Width of the client area of the ScrollGUI.
-   ;                   Pass 0 to set the client area to the width of the child GUI.
+   ;                   Pass 0 to set the client area to the width of the child GUI (doesn't really make sense).
    ;    Height      -  Height of the client area of the ScrollGUI.
-   ;                   Pass 0 to set the client area to the height of the child GUI.
+   ;                   Pass 0 to set the client area to the height of the child GUI (doesn't really make sense).
    ;    ----------- Optional:
    ;    GuiOptions  -  GUI options to be used when creating the ScrollGUI (e.g. +LabelMyLabel).
    ;                   Default: empty (no options)
@@ -26,89 +27,91 @@ Class ScrollGUI {
    ;                   3 : both
    ;                   Default: 3
    ;    Wheel       -  Register WM_MOUSEWHEEL / WM_MOUSEHWHEEL messages:
-   ;                   1 : horizontal
-   ;                   2 : vertical
-   ;                   3 : both
+   ;                   1 : register WM_MOUSEHWHEEL for horizontal scrolling (reqires Win Vista+)
+   ;                   2 : register WM_MOUSEWHEEL for vertical scrolling
+   ;                   3 : register both
+   ;                   4 : register WM_MOUSEWHEEL for vertical and MBUTTON+WM_MOUSEWHEEL for horizontal scrolling
    ;                   Default: 0
+   ;                   Add 8, 32, or 64 to require the Ctrl key, XBUTTON1, or XBUTTON2 as modifier for wheel messages
+   ;                   which shall be processed by the ScrollGUI. Unmodified wheel messages will be passed to the
+   ;                   child GUI in this case.
    ; Return values:
-   ;    On success: True
-   ;    On failure: False
+   ;    On failure:    False
    ; Remarks:
-   ;    The rect of the child GUI is determined using the 'AutoSize' option of the 'Gui, Show' command, after
-   ;    '-Caption' is applied to the child GUI.
+   ;    The dimensions of the child GUI are determined internally according to the visible children.
    ;    The maximum width and height of the parent GUI will be restricted to the dimensions of the child GUI.
-   ;    If you register mouse wheel messages, the messages will be captured solely to scroll the ScrollGUI.
-   ;    You won't be able to use the wheel to scroll child GUI controls.
+   ;    If you register mouse wheel messages, the messages will be captured to scroll the ScrollGUI.
+   ;    You won't be able to use the wheel to scroll child GUI controls unless a modifier is required.
    ; ===================================================================================================================
    __New(HGUI, Width, Height, GuiOptions := "", ScrollBars := 3, Wheel := 0) {
       Static SB_HORZ := 0, SB_VERT = 1
       Static WM_HSCROLL := 0x0114, WM_VSCROLL := 0x0115
       Static WM_MOUSEWHEEL := 0x020A, WM_MOUSEHWHEEL := 0x020E
       Static WS_HSCROLL := "0x100000", WS_VSCROLL := "0x200000"
+      RequireMod := False
+      RequireMod := (Wheel & 8) ? 8 : (Wheel & 32) ? 32 : (Wheel & 64) ? 64 : 0
+      Wheel &= 7
       If ((ScrollBars <> 1) && (ScrollBars <> 2) && (ScrollBars <> 3))
-      || ((Wheel <> 0) && (Wheel <> 1) && (Wheel <> 2) && (Wheel <> 3))
+      || ((Wheel <> 0) && (Wheel <> 1) && (Wheel <> 2) && (Wheel <> 3) && (Wheel <> 4))
          Return False
       If !DllCall("User32.dll\IsWindow", "Ptr", HGUI, "UInt")
          Return False
-      ; Child GUI
-      Gui, %HGUI%:-Caption
-      Gui, %HGUI%:Show, AutoSize Hide
       VarSetCapacity(RC, 16, 0)
-      DllCall("User32.dll\GetWindowRect", "Ptr", HGUI, "Ptr", &RC)
-      MaxH := NumGet(RC, 8, "Int") - NumGet(RC, 0, "Int")
-      MaxV := Numget(RC, 12, "Int") - NumGet(RC, 4, "Int")
+      ; Child GUI
+      If !This.AutoSize(HGUI, GuiW, GuiH)
+         Return False
+      Gui, %HGUI%:-Caption -Resize
+      Gui, %HGUI%:Show, w%GuiW% h%GuiH% Hide
+      MaxH := GuiW
+      MaxV := GuiH
       LineH := Ceil(MaxH / 20)
       LineV := Ceil(MaxV / 20)
       ; ScrollGUI
-      If (Width = 0)
+      If (Width = 0) || (Width > MaxH)
          Width := MaxH
-      If (Height = 0)
+      If (Height = 0) || (Height > MaxV)
          Height := MaxV
-      MX := MY := Styles := ""
-      If (ScrollBars & 1) {
-         MX := MaxH + 1
-         Styles .= " +" . WS_HSCROLL
-      }
-      If (ScrollBars & 2) {
-         Styles .= " +" . WS_VSCROLL
-         MY := MaxV + 1
-      }
+      Styles := (ScrollBars & 1 ? " +" . WS_HSCROLL : "") . (ScrollBars & 2 ? " +" . WS_VSCROLL : "")
       Gui, New, %GuiOptions% %Styles% +hwndHWND
       Gui, %HWND%:Show, w%Width% h%Height% Hide
-      If (MX <> "") || (MY <> "")
-         Gui, %HWND%:+MaxSize%MX%x%MY%
-      DllCall("User32.dll\GetClientRect", "Ptr", HWND, "Ptr", &RC)
-      PageH := NumGet(RC, 8, "Int") + 1
-      PageV := Numget(RC, 12, "Int") + 1
+      Gui, %HWND%:+MaxSize%MaxH%x%MaxV%
+      PageH := Width + 1
+      PageV := Height + 1
       ; Instance variables
       This.HWND := HWND
       This.HGUI := HGUI
       This.Width := Width
       This.Height := Height
+      This.RequireMod := RequireMod
+      This.UseShift := False
       If (ScrollBars & 1) {
          This.SetScrollInfo(SB_HORZ, {Max: MaxH, Page: PageH, Pos: 0})
          OnMessage(WM_HSCROLL, "ScrollGUI.On_WM_Scroll")
          If (Wheel & 1)
             OnMessage(WM_MOUSEHWHEEL, "ScrollGUI.On_WM_Wheel")
+         Else If (Wheel & 4) {
+            OnMessage(WM_MOUSEWHEEL, "ScrollGUI.On_WM_Wheel")
+            This.UseShift := True
+         }
          This.MaxH := MaxH
          This.LineH := LineH
          This.PageH := PageH
          This.PosH := 0
          This.ScrollH := True
-         If (Wheel)
+         If (Wheel & 5)
             This.WheelH := True
       }
       If (ScrollBars & 2) {
          This.SetScrollInfo(SB_VERT, {Max: MaxV, Page: PageV, Pos: 0})
          OnMessage(WM_VSCROLL, "ScrollGUI.On_WM_Scroll")
-         If (Wheel & 2)
+         If (Wheel & 6)
             OnMessage(WM_MOUSEWHEEL, "ScrollGUI.On_WM_Wheel")
          This.MaxV := MaxV
          This.LineV := LineV
          This.PageV := PageV
          This.PosV := 0
          This.ScrollV := True
-         If (Wheel)
+         If (Wheel & 6)
             This.WheelV := True
       }
       ; Set the position of the child GUI
@@ -204,31 +207,40 @@ Class ScrollGUI {
    ; ===================================================================================================================
    ; AdjustToChild  Adjust the scroll bars to the new child dimensions.
    ; Parameters:
-   ;    None.
+   ;    None
    ; Return values:
    ;    On success: True
    ;    On failure: False
    ; Remarks:
    ;    Call this method whenever the visible area of the child GUI has to be changed, e.g. after adding, hiding,
    ;    unhiding, resizing, or repositioning controls.
-   ;    The client area of the child GUI is determined using the 'AutoSize' option of a 'Gui, Show' command.
+   ;    The dimensions of the child GUI are determined internally according to the visible children.
    ; ===================================================================================================================
    AdjustToChild() {
       Static WS_HSCROLL := 0x100000, WS_VSCROLL := 0x200000
       VarSetCapacity(RC, 16, 0)
       DllCall("User32.dll\GetWindowRect", "Ptr", This.HGUI, "Ptr", &RC)
+      PrevW := NumGet(RC, 8, "Int") - NumGet(RC, 0, "Int")
+      PrevH := Numget(RC, 12, "Int") - NumGet(RC, 4, "Int")
       DllCall("User32.dll\ScreenToClient", "Ptr", This.HWND, "Ptr", &RC)
-      MX := MY := ""
       XC := XN := NumGet(RC, 0, "Int")
       YC := YN := NumGet(RC, 4, "Int")
-      Gui, % This.HGUI . ":Show", x%XC% y%YC% AutoSize
-      DllCall("User32.dll\GetWindowRect", "Ptr", This.HGUI, "Ptr", &RC)
-      MaxH := NumGet(RC, 8, "Int") - NumGet(RC, 0, "Int")
-      MaxV := Numget(RC, 12, "Int") - NumGet(RC, 4, "Int")
+      If !This.AutoSize(This.HGUI, GuiW, GuiH)
+         Return False
+      Gui, % This.HGUI . ":Show", x%XC% y%YC% w%GuiW% h%GuiH%
+      MaxH := GuiW
+      MaxV := GuiH
+      Gui, % This.HWND . ":+MaxSize" . MaxH . "x" . MaxV
+      If (GuiW < This.Width) || (GuiH < This.Height) {
+         Gui, % This.HWND . ":Show", w%GuiW% h%GuiH%
+         This.Width := GuiW
+         This.SetPage(1, MaxH + 1)
+         This.Height := GuiH
+         This.SetPage(2, MaxV + 1)
+      }
       LineH := Ceil(MaxH / 20)
       LineV := Ceil(MaxV / 20)
       If This.ScrollH {
-         MX := MaxH + 1
          This.SetMax(1, MaxH)
          This.LineH := LineH
          If (XC + MaxH) < This.Width {
@@ -236,10 +248,11 @@ Class ScrollGUI {
             If (XN > 0)
                XN := 0
             This.SetScrollInfo(0, {Pos: XN * -1})
+            This.GetScrollInfo(0, SI)
+            This.PosH := NumGet(SI, 20, "Int")
          }
       }
       If This.ScrollV {
-         MY := MaxV + 1
          This.SetMax(2, MaxV)
          This.LineV := LineV
          If (YC + MaxV) < This.Height {
@@ -247,10 +260,10 @@ Class ScrollGUI {
             If (YN > 0)
                YN := 0
             This.SetScrollInfo(1, {Pos: YN * -1})
+            This.GetScrollInfo(1, SI)
+            This.PosV := NumGet(SI, 20, "Int")
          }
       }
-      If (MX <> "") || (MY <> "")
-         Gui, % This.HWND . ":+MaxSize" . MX . "x" . MY
       If (XC <> XN) || (YC <> YN)
          DllCall("User32.dll\ScrollWindow", "Ptr", This.HWND, "Int", XN - XC, "Int", YN - YC, "Ptr", 0, "Ptr", 0)
       Return True
@@ -325,6 +338,56 @@ Class ScrollGUI {
    }
    ; ===================================================================================================================
    ; Methods for internal or system use!!!
+   ; ===================================================================================================================
+   AutoSize(HGUI, ByRef Width, ByRef Height) {
+      DHW := A_DetectHiddenWindows
+      DetectHiddenWindows, On
+      VarSetCapacity(RECT, 16, 0)
+      Width := Height := 0
+      HWND := HGUI
+      CMD := 5 ; GW_CHILD
+      L := T := R := B := LH := TH := ""
+      While (HWND := DllCall("GetWindow", "Ptr", HWND, "UInt", CMD, "UPtr")) && (CMD := 2) {
+         WinGetPos, X, Y, W, H, ahk_id %HWND%
+         W += X, H += Y
+         WinGet, Styles, Style, ahk_id %HWND%
+         If (Styles & 0x10000000) { ; WS_VISIBLE
+            If (L = "") || (X < L)
+               L := X
+            If (T = "") || (Y < T)
+               T := Y
+            If (R = "") || (W > R)
+               R := W
+            If (B = "") || (H > B)
+               B := H
+         }
+         Else {
+            If (LH = "") || (X < LH)
+               LH := X
+            If (TH = "") || (Y < TH)
+               TH := Y
+         }
+      }
+      DetectHiddenWindows, %DHW%
+      If (LH <> "") {
+         VarSetCapacity(POINT, 8, 0)
+         NumPut(LH, POINT, 0, "Int")
+         DllCall("ScreenToClient", "Ptr", HGUI, "Ptr", &POINT)
+         LH := NumGet(POINT, 0, "Int")
+      }
+      If (TH <> "") {
+         VarSetCapacity(POINT, 8, 0)
+         NumPut(TH, POINT, 4, "Int")
+         DllCall("ScreenToClient", "Ptr", HGUI, "Ptr", &POINT)
+         TH := NumGet(POINT, 4, "Int")
+      }
+      NumPut(L, RECT, 0, "Int"), NumPut(T, RECT,  4, "Int")
+      NumPut(R, RECT, 8, "Int"), NumPut(B, RECT, 12, "Int")
+      DllCall("MapWindowPoints", "Ptr", 0, "Ptr", HGUI, "Ptr", &RECT, "UInt", 2)
+      Width := NumGet(RECT, 8, "Int") + (LH <> "" ? LH : NumGet(RECT, 0, "Int"))
+      Height := NumGet(RECT, 12, "Int") + (TH <> "" ? TH : NumGet(RECT,  4, "Int"))
+      Return True
+   }
    ; ===================================================================================================================
    GetScrollInfo(SB, ByRef SI) {
       Static SI_SIZE := 28
@@ -409,14 +472,18 @@ Class ScrollGUI {
    }
    ; ===================================================================================================================
    On_WM_Wheel(LP, Msg, H) {
+      Static MK_CONTROL := 0x0008
+      Static MK_SHIFT := 0x0004
       Static WM_HSCROLL := 0x0114, WM_VSCROLL := 0x0115
       Static WM_MOUSEWHEEL := 0x020A, WM_MOUSEHWHEEL := 0x020E
       HWND := WinExist("A")
       If ScrollGUI.Instances.HasKey(HWND) {
          Instance := Object(ScrollGUI.Instances[HWND])
-         If ((Msg = WM_MOUSEHWHEEL) && Instance.WheelH)
-         || ((Msg = WM_MOUSEWHEEL)  && Instance.WheelV)
-            Return Instance.Wheel(This, LP, Msg, HWND)
+         If ((This & Instance.RequireMod) = Instance.RequireMod)
+            If (Instance.WheelH && (Msg = WM_MOUSEHWHEEL))
+            || (Instance.WheelH && ((Msg = WM_MOUSEWHEEL) && Instance.UseShift && (This & MK_SHIFT)))
+            || (Instance.WheelV && (Msg = WM_MOUSEWHEEL))
+               Return Instance.Wheel(This, LP, Msg, HWND)
       }
    }
    ; ===================================================================================================================
@@ -425,6 +492,8 @@ Class ScrollGUI {
       Static SB_LINEMINUS := 0, SB_LINEPLUS := 1
       Static WM_MOUSEWHEEL := 0x020A, WM_MOUSEHWHEEL := 0x020E
       Static WM_HSCROLL := 0x0114, WM_VSCROLL := 0x0115
+      If (Msg = WM_MOUSEWHEEL) && This.UseShift && (WP & MK_SHIFT)
+         Msg := WM_MOUSEHWHEEL
       MSG := (Msg = WM_MOUSEWHEEL ? WM_VSCROLL : WM_HSCROLL)
       SB := ((WP >> 16) > 0x7FFF) || (WP < 0) ? SB_LINEPLUS : SB_LINEMINUS
       Return This.Scroll(SB, 0, MSG, H)
